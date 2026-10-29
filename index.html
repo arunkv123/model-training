@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign language letter detector</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #eef0f6;
+    --surface: #ffffff;
+    --ink: #1b2340;
+    --muted: #5d6585;
+    --line: #d6daea;
+    --accent: #3b4bdb;
+    --accent-ink: #ffffff;
+    --ok: #1a8a5a;
+    --warn: #b4540a;
+    --radius: 14px;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12162b;
+      --surface: #1b2140;
+      --ink: #eef0fb;
+      --muted: #a2a9c9;
+      --line: #2e3560;
+      --accent: #8a96ff;
+      --accent-ink: #12162b;
+      --ok: #4cd08f;
+      --warn: #f0a35e;
+      color-scheme: dark;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 17px;
+    line-height: 1.5;
+    padding: 24px 16px 48px;
+  }
+  main { max-width: 980px; margin: 0 auto; }
+
+  h1 { font-size: 1.6rem; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .lede { margin: 0 0 20px; color: var(--muted); max-width: 60ch; }
+
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+
+  /* model + controls */
+  .setup { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 16px; }
+  .field { flex: 1 1 320px; display: flex; flex-direction: column; gap: 4px; }
+  label { font-size: 0.9rem; color: var(--muted); }
+  input[type="url"] {
+    font: inherit; color: var(--ink); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; width: 100%;
+  }
+  button {
+    font: inherit; font-weight: 700; cursor: pointer;
+    border-radius: 10px; padding: 10px 18px; border: 1px solid var(--line);
+    background: var(--surface); color: var(--ink);
+  }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+  /* camera + result */
+  .stage { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 720px) { .stage { grid-template-columns: 1fr; } }
+
+  .camera {
+    position: relative; aspect-ratio: 1 / 1; width: 100%;
+    background: #0d1022; border-radius: 10px; overflow: hidden;
+    display: grid; place-items: center;
+  }
+  #webcam-container canvas { width: 100% !important; height: 100% !important; display: block; object-fit: cover; }
+  #webcam-container { position: absolute; inset: 0; }
+  .camera-msg { color: #c9cff0; text-align: center; padding: 24px; position: relative; max-width: 28ch; }
+
+  .result { display: flex; flex-direction: column; gap: 14px; }
+  .letter-card {
+    border: 1px solid var(--line); border-radius: 10px; background: var(--bg);
+    padding: 12px 16px 16px; text-align: center; transition: border-color .15s;
+  }
+  .letter-card.locked { border-color: var(--ok); }
+  .letter-card .small { color: var(--muted); font-size: 0.9rem; }
+  #letter {
+    font-size: clamp(5rem, 16vw, 9rem); font-weight: 700; line-height: 1.05;
+    min-height: 1.05em; color: var(--ink);
+  }
+  #letter.long { font-size: clamp(2rem, 7vw, 3.5rem); line-height: 1.6; }
+  #letter.idle { color: var(--muted); opacity: 0.5; }
+
+  .meter { height: 10px; background: var(--line); border-radius: 99px; overflow: hidden; }
+  .meter > span { display: block; height: 100%; width: 0; background: var(--accent); }
+  #hold-bar { background: var(--ok); }
+  .meter-row { display: flex; justify-content: space-between; font-size: 0.9rem; color: var(--muted); margin-bottom: 4px; }
+
+  .top3 { display: grid; gap: 6px; font-size: 0.95rem; }
+  .top3 .row { display: grid; grid-template-columns: 5.5rem 1fr 3rem; gap: 8px; align-items: center; }
+  .top3 .row .meter { height: 8px; }
+  .top3 .pct { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .top3 .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* settings */
+  .settings { display: flex; flex-wrap: wrap; gap: 18px 28px; align-items: center; margin-top: 16px; font-size: 0.95rem; }
+  .settings label { color: var(--ink); display: flex; align-items: center; gap: 8px; }
+  input[type="range"] { accent-color: var(--accent); }
+
+  /* transcript */
+  .transcript { margin-top: 16px; }
+  #output {
+    min-height: 3.2rem; font-size: 1.8rem; letter-spacing: 0.08em; word-break: break-all;
+    border: 1px dashed var(--line); border-radius: 10px; padding: 10px 14px; background: var(--bg);
+  }
+  #output:empty::before { content: "Letters you hold steady will appear here."; font-size: 1rem; letter-spacing: 0; color: var(--muted); }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+  #status { margin: 12px 0 0; min-height: 1.5em; font-size: 0.95rem; color: var(--muted); }
+  #status.error { color: var(--warn); }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Sign language letter detector</h1>
+  <p class="lede">Show a sign to your camera and the matching letter appears. Hold a sign steady for a moment to add it to the text below.</p>
+
+  <section class="panel" aria-label="Model and camera controls">
+    <div class="setup">
+      <div class="field">
+        <label for="model-url" hidden='true' >Teachable Machine model link</label>
+        <input id="model-url" hidden='true' type="url" value="https://teachablemachine.withgoogle.com/models/imCee7LIT/" spellcheck="false">
+      </div>
+      <button id="start-btn" class="primary" type="button">Start camera</button>
+      <button id="stop-btn" type="button" disabled>Stop</button>
+    </div>
+
+    <div class="stage">
+      <div class="camera">
+        <div id="webcam-container"></div>
+        <p class="camera-msg" id="camera-msg">The camera preview will show here once you start.</p>
+      </div>
+
+      <div class="result" aria-live="polite">
+        <div class="letter-card" id="letter-card">
+          <div class="small">Detected sign</div>
+          <div id="letter" class="idle">–</div>
+          <div class="meter-row"><span>Confidence</span><span id="conf-text">0%</span></div>
+          <div class="meter"><span id="conf-bar"></span></div>
+        </div>
+
+        <div>
+          <div class="meter-row"><span>Hold steady to add</span><span id="hold-text"></span></div>
+          <div class="meter"><span id="hold-bar"></span></div>
+        </div>
+
+        <div class="top3" id="top3" aria-label="Top three matches"></div>
+      </div>
+    </div>
+
+    <div class="settings">
+      <label>Minimum confidence
+        <input id="threshold" type="range" min="50" max="99" value="85">
+        <span id="threshold-val">85%</span>
+      </label>
+      <label>Hold time
+        <input id="hold-ms" type="range" min="500" max="3000" step="100" value="1200">
+        <span id="hold-ms-val">1.2 s</span>
+      </label>
+      <label><input id="auto-add" type="checkbox" checked> Add letters automatically</label>
+    </div>
+
+    <div class="transcript">
+      <label for="output">Text</label>
+      <div id="output" role="status"></div>
+      <div class="actions">
+        <button id="add-btn" type="button">Add current letter</button>
+        <button id="space-btn" type="button">Space</button>
+        <button id="back-btn" type="button">Delete last</button>
+        <button id="clear-btn" type="button">Clear</button>
+        <button id="copy-btn" type="button">Copy text</button>
+      </div>
+    </div>
+
+    <p id="status" role="status"></p>
+  </section>
+</main>
+
+<!-- Teachable Machine libraries (versions recommended for exported image models) -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.3.1/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+<script>
+  // Classes with these names are shown but never added to the text.
+  const IGNORED_CLASSES = ["nothing", "none", "background", "blank", "no sign", "neutral"];
+
+  let model, webcam, maxPredictions;
+  let running = false;
+  let rafId = null;
+
+  // Hold-to-add state
+  let candidate = null;      // letter currently being held
+  let candidateSince = 0;    // when it first appeared
+  let added = false;         // already added for this hold
+
+  const $ = (id) => document.getElementById(id);
+  const els = {
+    url: $("model-url"), start: $("start-btn"), stop: $("stop-btn"),
+    camMsg: $("camera-msg"), cam: $("webcam-container"),
+    letter: $("letter"), card: $("letter-card"),
+    confText: $("conf-text"), confBar: $("conf-bar"),
+    holdBar: $("hold-bar"), holdText: $("hold-text"),
+    top3: $("top3"), threshold: $("threshold"), thresholdVal: $("threshold-val"),
+    holdMs: $("hold-ms"), holdMsVal: $("hold-ms-val"), auto: $("auto-add"),
+    output: $("output"), status: $("status"),
+  };
+  let outputText = "";
+
+  function setStatus(msg, isError = false) {
+    els.status.textContent = msg;
+    els.status.className = isError ? "error" : "";
+  }
+
+  function renderOutput() { els.output.textContent = outputText; }
+  function isIgnored(name) { return IGNORED_CLASSES.includes(name.trim().toLowerCase()); }
+
+  // Create the three result rows once
+  for (let i = 0; i < 3; i++) {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.innerHTML = '<span class="nm">–</span><div class="meter"><span></span></div><span class="pct">0%</span>';
+    els.top3.appendChild(row);
+  }
+
+  async function init() {
+    let base = els.url.value.trim();
+    if (!base) { setStatus("Paste your Teachable Machine model link first.", true); return; }
+    if (!base.endsWith("/")) base += "/";
+
+    els.start.disabled = true;
+    setStatus("Loading model…");
+
+    try {
+      model = await tmImage.load(base + "model.json", base + "metadata.json");
+      maxPredictions = model.getTotalClasses();
+
+      setStatus("Starting camera…");
+      const flip = true; // mirror the preview so it feels natural
+      webcam = new tmImage.Webcam(400, 400, flip);
+      await webcam.setup();   // asks for camera permission
+      await webcam.play();
+
+      els.cam.innerHTML = "";
+      els.cam.appendChild(webcam.canvas);
+      els.camMsg.style.display = "none";
+
+      running = true;
+      els.stop.disabled = false;
+      setStatus("Camera is on. Show a sign.");
+      rafId = window.requestAnimationFrame(loop);
+    } catch (err) {
+      console.error(err);
+      els.start.disabled = false;
+      const denied = err && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
+      setStatus(
+        denied
+          ? "Camera access was blocked. Allow camera access in your browser and try again."
+          : "Couldn’t start: " + (err && err.message ? err.message : err) + ". Check the model link and that the page is served over https or localhost.",
+        true
+      );
+    }
+  }
+
+  function stop() {
+    running = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    if (webcam) webcam.stop();
+    els.cam.innerHTML = "";
+    els.camMsg.style.display = "";
+    els.start.disabled = false;
+    els.stop.disabled = true;
+    resetDisplay();
+    setStatus("Camera stopped.");
+  }
+
+  function resetDisplay() {
+    els.letter.textContent = "–";
+    els.letter.className = "idle";
+    els.card.classList.remove("locked");
+    els.confText.textContent = "0%";
+    els.confBar.style.width = "0";
+    els.holdBar.style.width = "0";
+    els.holdText.textContent = "";
+    candidate = null; added = false;
+  }
+
+  async function loop() {
+    if (!running) return;
+    webcam.update();
+    await predict();
+    rafId = window.requestAnimationFrame(loop);
+  }
+
+  async function predict() {
+    const prediction = await model.predict(webcam.canvas);
+    const sorted = prediction.slice().sort((a, b) => b.probability - a.probability);
+    const best = sorted[0];
+    const threshold = Number(els.threshold.value) / 100;
+    const confident = best.probability >= threshold;
+
+    // Top 3 list
+    const rows = els.top3.children;
+    for (let i = 0; i < 3; i++) {
+      const p = sorted[i];
+      if (!p) { rows[i].style.visibility = "hidden"; continue; }
+      rows[i].style.visibility = "visible";
+      rows[i].querySelector(".nm").textContent = p.className;
+      rows[i].querySelector(".meter > span").style.width = (p.probability * 100).toFixed(0) + "%";
+      rows[i].querySelector(".pct").textContent = (p.probability * 100).toFixed(0) + "%";
+    }
+
+    // Main letter
+    els.confText.textContent = (best.probability * 100).toFixed(0) + "%";
+    els.confBar.style.width = (best.probability * 100).toFixed(0) + "%";
+
+    if (confident) {
+      els.letter.textContent = best.className;
+      els.letter.className = best.className.length > 2 ? "long" : "";
+    } else {
+      els.letter.textContent = "–";
+      els.letter.className = "idle";
+    }
+
+    // Hold-to-add logic
+    const now = performance.now();
+    const usable = confident && !isIgnored(best.className);
+    const holdNeeded = Number(els.holdMs.value);
+
+    if (!usable) {
+      candidate = null; added = false;
+      els.holdBar.style.width = "0";
+      els.holdText.textContent = "";
+      els.card.classList.remove("locked");
+      return;
+    }
+
+    if (best.className !== candidate) {
+      candidate = best.className;
+      candidateSince = now;
+      added = false;
+      els.card.classList.remove("locked");
+    }
+
+    const heldFor = now - candidateSince;
+    const progress = Math.min(heldFor / holdNeeded, 1);
+    els.holdBar.style.width = (added ? 100 : progress * 100) + "%";
+
+    if (!added && progress >= 1) {
+      added = true;
+      els.card.classList.add("locked");
+      if (els.auto.checked) addLetter(candidate);
+    }
+    els.holdText.textContent = added ? (els.auto.checked ? "Added" : "Ready") : "";
+  }
+
+  function addLetter(letter) {
+    outputText += letter;
+    renderOutput();
+  }
+
+  // Controls
+  els.start.addEventListener("click", init);
+  els.stop.addEventListener("click", stop);
+
+  els.threshold.addEventListener("input", () => { els.thresholdVal.textContent = els.threshold.value + "%"; });
+  els.holdMs.addEventListener("input", () => { els.holdMsVal.textContent = (els.holdMs.value / 1000).toFixed(1) + " s"; });
+
+  $("add-btn").addEventListener("click", () => {
+    const l = els.letter.textContent;
+    if (l && l !== "–" && !isIgnored(l)) addLetter(l);
+  });
+  $("space-btn").addEventListener("click", () => { outputText += " "; renderOutput(); });
+  $("back-btn").addEventListener("click", () => { outputText = outputText.slice(0, -1); renderOutput(); });
+  $("clear-btn").addEventListener("click", () => { outputText = ""; renderOutput(); });
+  $("copy-btn").addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(outputText);
+      setStatus("Text copied.");
+    } catch (e) {
+      setStatus("Couldn’t copy. Select the text and copy it manually.", true);
+    }
+  });
+
+  renderOutput();
+</script>
+</body>
+</html>
